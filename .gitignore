@@ -1,0 +1,10 @@
+# Extracted upstream release archives — work from src/ instead
+GL*_Pico_Binary_Source_RunCPM_*/
+
+# Arduino IDE build output
+build/
+.arduino/
+
+# OS noise
+.DS_Store
+Thumbs.db
