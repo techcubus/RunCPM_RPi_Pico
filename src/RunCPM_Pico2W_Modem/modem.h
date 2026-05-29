@@ -102,10 +102,19 @@ static uint8  rx_buf[MODEM_RX_BUFSIZE];
 static uint16 rx_head = 0;
 static uint16 rx_tail = 0;
 
-static inline bool  rx_empty()         { return rx_head == rx_tail; }
-static inline bool  rx_full()          { return ((rx_tail + 1) % MODEM_RX_BUFSIZE) == rx_head; }
-static inline void  rx_push(uint8 ch)  { if (!rx_full())  { rx_buf[rx_tail] = ch; rx_tail = (rx_tail + 1) % MODEM_RX_BUFSIZE; } }
-static inline uint8 rx_pop()           { uint8 ch = rx_buf[rx_head]; rx_head = (rx_head + 1) % MODEM_RX_BUFSIZE; return ch; }
+// Number of bytes currently in the ring buffer.
+// NOTE: head/tail are kept in [0, MODEM_RX_BUFSIZE-1] by % MODEM_RX_BUFSIZE.
+// Correct occupancy formula: (tail - head + SIZE) % SIZE  (NOT (tail-head)&(SIZE-1),
+// which gives a wrong result when tail has wrapped past head).
+static inline uint16 rx_count()        { return (rx_tail - rx_head + MODEM_RX_BUFSIZE) % MODEM_RX_BUFSIZE; }
+static inline bool   rx_empty()        { return rx_head == rx_tail; }
+static inline bool   rx_full()         { return ((rx_tail + 1) % MODEM_RX_BUFSIZE) == rx_head; }
+static inline void   rx_push(uint8 ch) { if (!rx_full())  { rx_buf[rx_tail] = ch; rx_tail = (rx_tail + 1) % MODEM_RX_BUFSIZE; } }
+static inline uint8  rx_pop()          { uint8 ch = rx_buf[rx_head]; rx_head = (rx_head + 1) % MODEM_RX_BUFSIZE; return ch; }
+
+// Per-heartbeat diagnostic counters (file-scope so modem_to_rx / modem_read can touch them)
+static uint32 _modem_hb_pushes = 0;   // bytes pushed into rx_buf this window
+static uint32 _modem_hb_pops   = 0;   // bytes popped from rx_buf this window
 
 // -----------------------------------------------------------------------------------------
 // +++ escape sequence state
@@ -146,7 +155,7 @@ static void modem_dial(const char *dest);
 // here as well causes double output and garbled terminal display.
 static void modem_to_rx(const char *s) {
     while (*s) {
-        if (!rx_full()) rx_push((uint8)*s);
+        if (!rx_full()) { rx_push((uint8)*s); _modem_hb_pushes++; }
         s++;
     }
 }
@@ -477,6 +486,7 @@ bool modem_rx_available() {
 // Read one byte from the RX buffer (call only when modem_rx_available() is true)
 uint8 modem_read() {
     if (rx_empty()) return 0x1a;  // ^Z — CP/M EOF
+    _modem_hb_pops++;
     return rx_pop();
 }
 
@@ -521,6 +531,7 @@ void modem_write(uint8 ch) {
             cmd_len--;
             if (modem_echo) {
                 rx_push(ch); rx_push(' '); rx_push(ch);   // back to Z80 via AUX RX
+                _modem_hb_pushes += 3;
             }
             return;
         }
@@ -530,6 +541,7 @@ void modem_write(uint8 ch) {
             cmd_buf[cmd_len] = 0;
             if (modem_echo) {
                 rx_push('\r'); rx_push('\n');   // back to Z80
+                _modem_hb_pushes += 2;
             }
 
             // A/ — repeat last command
@@ -550,6 +562,7 @@ void modem_write(uint8 ch) {
             cmd_buf[cmd_len++] = (ch >= 'a' && ch <= 'z') ? (ch - 32) : ch;
             if (modem_echo) {
                 rx_push(ch);   // echo back to Z80 via AUX RX
+                _modem_hb_pushes++;
             }
         }
     }
@@ -657,15 +670,13 @@ static void _dbg_uint32(uint32 v) {
 void modem_update() {
 
     // --- Call counter: incremented on every entry (before rate-limit) so the
-    //     heartbeat can show whether _Bios() is even running. ---
+    //     heartbeat can show whether _Bios() / _Bdos() is even running. ---
     static uint32 total_calls = 0;
     total_calls++;
 
-    // --- Heartbeat: print a one-line summary every 3 seconds so we can tell
-    //     whether modem_update() is alive and which state the modem is in.
-    //     "last_op" is set immediately before each potentially-blocking WiFi
-    //     call and cleared after; if the heartbeat prints the same last_op
-    //     twice it means that call is blocking. ---
+    // --- Heartbeat: print a one-line summary every 3 seconds ---
+    //     "last_op" is set before each potentially-blocking WiFi call and
+    //     cleared after; seeing the same op twice in a row means it blocked.
     static uint32 last_hb_ms   = 0;
     static const char *last_op = "idle";
     uint32 now_ms = millis();
@@ -676,19 +687,26 @@ void modem_update() {
         _puts(" calls=");
         _dbg_uint32(total_calls);
         _puts(" rx=");
-        _dbg_uint32((rx_tail - rx_head) & (MODEM_RX_BUFSIZE - 1));
+        // (tail - head + SIZE) % SIZE is correct even when tail has wrapped past head.
+        _dbg_uint32((rx_tail - rx_head + MODEM_RX_BUFSIZE) % MODEM_RX_BUFSIZE);
+        _puts(" push=");
+        _dbg_uint32(_modem_hb_pushes);
+        _puts(" pop=");
+        _dbg_uint32(_modem_hb_pops);
         _puts(" op=");
         _puts(last_op);
         _puts("]\r\n");
-        total_calls = 0;
+        total_calls      = 0;
+        _modem_hb_pushes = 0;
+        _modem_hb_pops   = 0;
     }
 
-    // --- Rate-limit: cap the heavy WiFi polling at ~200 Hz (every 5 ms).
-    //     modem_update() is called on every BIOS entry; at Z80 emulation
-    //     speed (14 MHz) that is thousands of calls/sec which hangs the
-    //     CYW43/lwIP stack. ---
+    // --- Rate-limit: cap WiFi polling at ~50 Hz (every 20 ms).
+    //     modem_update() is called on every BIOS/BDOS entry; at Z80 emulation
+    //     speed that is 100K+ calls/sec, which can stress the CYW43/lwIP stack.
+    //     50 Hz is more than sufficient for interactive modem use. ---
     static uint32 last_update_ms = 0;
-    if ((now_ms - last_update_ms) < 5) return;
+    if ((now_ms - last_update_ms) < 20) return;
     last_update_ms = now_ms;
 
     // --- Drain incoming TCP data into RX ring buffer ---
@@ -696,10 +714,11 @@ void modem_update() {
         last_op = "tcp_drain";
         while (modem_client.available() && !rx_full()) {
             rx_push((uint8)modem_client.read());
+            _modem_hb_pushes++;
         }
         last_op = "idle";
 
-        // --- +++ guard time: confirm escape after 1 s silence ---
+        // --- +++ guard time: confirm escape after silence ---
         if (escape_count >= 3) {
             uint32 guard_ms = s_reg[S_GUARDTIME] * 20UL;
             if ((millis() - escape_last_ms) >= guard_ms) {
@@ -720,26 +739,33 @@ void modem_update() {
         }
     }
 
-    // --- Check for incoming connections (only when idle in COMMAND mode) ---
+    // --- Check for incoming connections (COMMAND mode only).
+    //     Cooldown: wait at least 500 ms after leaving RINGING before accepting
+    //     again — prevents rapid accept/drop cycles that exhaust lwIP PCBs. ---
+    static uint32 last_accept_ms = 0;
     if (modem_state == MODEM_COMMAND && modem_server != NULL) {
-        last_op = "accept";
-        WiFiClient incoming = modem_server->accept();
-        last_op = "idle";
-        if (incoming) {
-            if (s_reg[S_AUTOANSWER] > 0) {
-                // Auto-answer immediately
-                modem_client = incoming;
-                modem_client.setNoDelay(true);
-                modem_state       = MODEM_ONLINE;
-                online_last_tx_ms = millis();
-                escape_count      = 0;
-                modem_response(RC_CONNECT);
-            } else {
-                // Ring — wait for ATA
-                modem_pending        = incoming;
-                s_reg[S_RINGCOUNT]   = 0;
-                modem_state          = MODEM_RINGING;
-                modem_response(RC_RING);
+        if ((now_ms - last_accept_ms) >= 500) {
+            last_op = "accept";
+            WiFiClient incoming = modem_server->accept();
+            last_op = "idle";
+            if (incoming) {
+                if (s_reg[S_AUTOANSWER] > 0) {
+                    // Auto-answer immediately
+                    modem_client = incoming;
+                    modem_client.setNoDelay(true);
+                    modem_state       = MODEM_ONLINE;
+                    online_last_tx_ms = millis();
+                    escape_count      = 0;
+                    modem_response(RC_CONNECT);
+                } else {
+                    // Ring — wait for ATA
+                    if (modem_pending.connected()) modem_pending.stop();
+                    modem_pending        = incoming;
+                    s_reg[S_RINGCOUNT]   = 0;
+                    modem_state          = MODEM_RINGING;
+                    _puts("[DBG:RINGING start]\r\n");
+                    modem_response(RC_RING);
+                }
             }
         }
     }
@@ -753,13 +779,19 @@ void modem_update() {
         last_op = "idle";
 
         if (!pconn) {
-            // Caller gave up
+            // Caller gave up — explicitly close PCB, start cooldown, return to COMMAND
+            _puts("[DBG:RINGING->CMD caller dropped]\r\n");
+            modem_pending.stop();           // release lwIP PCB explicitly
             modem_state        = MODEM_COMMAND;
             s_reg[S_RINGCOUNT] = 0;
+            last_accept_ms     = now_ms;   // begin accept cooldown
         } else if ((millis() - last_ring_ms) > 4000) {
             last_ring_ms = millis();
             s_reg[S_RINGCOUNT]++;
-            modem_response(RC_RING);
+            // Only push RING if rx_buf has plenty of space (don't flood if Z80 is slow)
+            if (rx_count() < (MODEM_RX_BUFSIZE * 3 / 4)) {
+                modem_response(RC_RING);
+            }
 
             if (s_reg[S_AUTOANSWER] > 0 &&
                 s_reg[S_RINGCOUNT] >= s_reg[S_AUTOANSWER]) {

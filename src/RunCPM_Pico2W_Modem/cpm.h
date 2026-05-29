@@ -729,6 +729,10 @@ void _Bdos(void) {
     _logBdosIn(ch);
 #endif
 
+#ifdef USE_MODEM
+    modem_update();  // keep WiFi state machine alive during BDOS as well
+#endif
+
     HL = 0x0000;                            // HL is reset by the BDOS
     SET_LOW_REGISTER(BC, LOW_REGISTER(DE)); // C ends up equal to E
 
