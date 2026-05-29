@@ -495,6 +495,16 @@ uint8 _sys_makedisk(uint8 drive) {
 void _HardwareInit(void) {
 }
 
+// Forward declarations — modem.h is included after this file in the .ino
+#ifdef USE_MODEM
+bool  modem_rx_available();
+uint8 modem_read();
+bool  modem_tx_ready();
+void  modem_write(uint8 ch);
+uint8 modem_lsr();
+uint8 modem_msr();
+#endif
+
 void _HardwareOut(const uint32 Port, const uint32 Value) {
 #ifdef USE_MODEM
     if (Port == UART_BASE) {        // UART_BASE+0 — TX: Z80 sends byte to modem
