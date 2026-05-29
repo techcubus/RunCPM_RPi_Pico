@@ -554,6 +554,10 @@ void _Bios(void) {
     _logBiosIn(ch);
 #endif
 
+#ifdef USE_MODEM
+    modem_update();  // keep WiFi state machine alive on every BIOS entry
+#endif
+
     switch (ch) {
     case B_BOOT: {
         Status = STATUS_EXIT; // 0 - Ends RunCPM
@@ -583,10 +587,17 @@ void _Bios(void) {
         break;
     }
     case B_AUXOUT: { // 6 - Aux/Punch output
+#ifdef USE_MODEM
+        modem_write(LOW_REGISTER(BC));
+#endif
         break;
     }
-    case B_READER: { // 7 - Reader input (returns 0x1a = device not implemented)
+    case B_READER: { // 7 - Reader input (returns 0x1a = EOF if nothing waiting)
+#ifdef USE_MODEM
+        SET_HIGH_REGISTER(AF, modem_rx_available() ? modem_read() : 0x1a);
+#else
         SET_HIGH_REGISTER(AF, 0x1a);
+#endif
         break;
     }
     case B_HOME: { // 8 - Home disk head
@@ -631,11 +642,19 @@ void _Bios(void) {
         break;
     }
     case B_AUXIST: { // 18 - Return status of current auxiliary input device
+#ifdef USE_MODEM
+        SET_HIGH_REGISTER(AF, modem_rx_available() ? 0xff : 0x00);
+#else
         SET_HIGH_REGISTER(AF, 0x00);
+#endif
         break;
     }
     case B_AUXOST: { // 19 - Return status of current auxiliary output device
+#ifdef USE_MODEM
+        SET_HIGH_REGISTER(AF, modem_tx_ready() ? 0xff : 0x00);
+#else
         SET_HIGH_REGISTER(AF, 0x00);
+#endif
         break;
     }
     case B_DEVTBL: { // 20 - Return the address of the devices table, or 0 if not implemented

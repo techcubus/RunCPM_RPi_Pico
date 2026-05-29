@@ -496,9 +496,20 @@ void _HardwareInit(void) {
 }
 
 void _HardwareOut(const uint32 Port, const uint32 Value) {
+#ifdef USE_MODEM
+    if (Port == UART_BASE) {        // UART_BASE+0 — TX: Z80 sends byte to modem
+        modem_write((uint8)Value);
+        return;
+    }
+#endif
 }
 
 uint32 _HardwareIn(const uint32 Port) {
+#ifdef USE_MODEM
+    if (Port == UART_BASE)     return modem_rx_available() ? modem_read() : 0;
+    if (Port == UART_BASE + 5) return modem_lsr();  // Line Status Register
+    if (Port == UART_BASE + 6) return modem_msr();  // Modem Status Register (DCD)
+#endif
     return 0;
 }
 
