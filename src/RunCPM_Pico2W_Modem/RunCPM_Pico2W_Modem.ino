@@ -100,8 +100,13 @@ void setup(void) {
 #endif
 
     _puts("-------------------------------------------------\r\n");
+#if defined(ARDUINO_RASPBERRY_PI_PICO2W)
     _puts("     running    on   Raspberry Pi  [\e[1mPico 2 W\e[0m]\r\n");
     _puts("     compiled with   RP2350        [\e[1mv5.4.3\e[0m] \r\n");
+#else
+    _puts("     running    on   Raspberry Pi  [\e[1mPico W\e[0m]\r\n");
+    _puts("     compiled with   RP2040        [\e[1mv5.4.3\e[0m] \r\n");
+#endif
     _puts("               and   SDFat         [\e[1mv2.3.1\e[0m] \r\n");
     _puts("                     Revision      [\e[1m");
     _puts(GL_REV);
@@ -149,7 +154,11 @@ void setup(void) {
     _puts("\e[0m]\r\n");
 
     Z80estimateClock();
+#if defined(ARDUINO_RASPBERRY_PI_PICO2W)
     _puts("CPU-Clock            [\e[1m300Mhz\e[0m]\r\n");
+#else
+    _puts("CPU-Clock            [\e[1m260Mhz\e[0m]\r\n");
+#endif
 
     _puts("Virtual UART         [\e[1m0x");
     _puthex8(UART_BASE);
