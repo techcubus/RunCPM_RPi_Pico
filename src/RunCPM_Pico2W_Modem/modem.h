@@ -644,6 +644,15 @@ void modem_init() {
 // =========================================================================================
 void modem_update() {
 
+    // --- Rate-limit: modem_update() is called on every BIOS entry.
+    //     At Z80 emulation speed (14 MHz) that is thousands of calls/sec.
+    //     Hammering the CYW43/lwIP stack that hard causes hangs.
+    //     Cap the heavy WiFi polling at ~200 Hz (every 5 ms). ---
+    static uint32 last_update_ms = 0;
+    uint32 now_ms = millis();
+    if ((now_ms - last_update_ms) < 5) return;
+    last_update_ms = now_ms;
+
     // --- Drain incoming TCP data into RX ring buffer ---
     if (modem_state == MODEM_ONLINE) {
         while (modem_client.available() && !rx_full()) {
