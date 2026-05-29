@@ -642,22 +642,62 @@ void modem_init() {
 // =========================================================================================
 // modem_update — call on every BIOS entry to keep the state machine alive
 // =========================================================================================
+// Debug helpers — intentionally simple, no heap allocation.
+// Printed to Serial; if Serial itself is hung we'll see nothing which is also diagnostic.
+// =========================================================================================
+static void _dbg_uint32(uint32 v) {
+    char buf[12];
+    uint8 i = 0;
+    if (v == 0) { _putch('0'); return; }
+    while (v && i < 10) { buf[i++] = '0' + (v % 10); v /= 10; }
+    while (i--) _putch(buf[i]);
+}
+
+// =========================================================================================
 void modem_update() {
 
-    // --- Rate-limit: modem_update() is called on every BIOS entry.
-    //     At Z80 emulation speed (14 MHz) that is thousands of calls/sec.
-    //     Hammering the CYW43/lwIP stack that hard causes hangs.
-    //     Cap the heavy WiFi polling at ~200 Hz (every 5 ms). ---
-    static uint32 last_update_ms = 0;
+    // --- Call counter: incremented on every entry (before rate-limit) so the
+    //     heartbeat can show whether _Bios() is even running. ---
+    static uint32 total_calls = 0;
+    total_calls++;
+
+    // --- Heartbeat: print a one-line summary every 3 seconds so we can tell
+    //     whether modem_update() is alive and which state the modem is in.
+    //     "last_op" is set immediately before each potentially-blocking WiFi
+    //     call and cleared after; if the heartbeat prints the same last_op
+    //     twice it means that call is blocking. ---
+    static uint32 last_hb_ms   = 0;
+    static const char *last_op = "idle";
     uint32 now_ms = millis();
+    if ((now_ms - last_hb_ms) >= 3000) {
+        last_hb_ms = now_ms;
+        _puts("[MU state=");
+        _puthex8((uint8)modem_state);
+        _puts(" calls=");
+        _dbg_uint32(total_calls);
+        _puts(" rx=");
+        _dbg_uint32((rx_tail - rx_head) & (MODEM_RX_BUFSIZE - 1));
+        _puts(" op=");
+        _puts(last_op);
+        _puts("]\r\n");
+        total_calls = 0;
+    }
+
+    // --- Rate-limit: cap the heavy WiFi polling at ~200 Hz (every 5 ms).
+    //     modem_update() is called on every BIOS entry; at Z80 emulation
+    //     speed (14 MHz) that is thousands of calls/sec which hangs the
+    //     CYW43/lwIP stack. ---
+    static uint32 last_update_ms = 0;
     if ((now_ms - last_update_ms) < 5) return;
     last_update_ms = now_ms;
 
     // --- Drain incoming TCP data into RX ring buffer ---
     if (modem_state == MODEM_ONLINE) {
+        last_op = "tcp_drain";
         while (modem_client.available() && !rx_full()) {
             rx_push((uint8)modem_client.read());
         }
+        last_op = "idle";
 
         // --- +++ guard time: confirm escape after 1 s silence ---
         if (escape_count >= 3) {
@@ -670,15 +710,21 @@ void modem_update() {
     }
 
     // --- Detect TCP disconnect ---
-    if (modem_state == MODEM_ONLINE &&
-        !modem_client.connected() && !modem_client.available()) {
-        modem_hangup(true);  // sends NO CARRIER
-        return;
+    if (modem_state == MODEM_ONLINE) {
+        last_op = "client_connected";
+        bool disc = !modem_client.connected() && !modem_client.available();
+        last_op = "idle";
+        if (disc) {
+            modem_hangup(true);  // sends NO CARRIER
+            return;
+        }
     }
 
     // --- Check for incoming connections (only when idle in COMMAND mode) ---
     if (modem_state == MODEM_COMMAND && modem_server != NULL) {
+        last_op = "accept";
         WiFiClient incoming = modem_server->accept();
+        last_op = "idle";
         if (incoming) {
             if (s_reg[S_AUTOANSWER] > 0) {
                 // Auto-answer immediately
@@ -702,7 +748,11 @@ void modem_update() {
     if (modem_state == MODEM_RINGING) {
         static uint32 last_ring_ms = 0;
 
-        if (!modem_pending.connected()) {
+        last_op = "pending_connected";
+        bool pconn = modem_pending.connected();
+        last_op = "idle";
+
+        if (!pconn) {
             // Caller gave up
             modem_state        = MODEM_COMMAND;
             s_reg[S_RINGCOUNT] = 0;

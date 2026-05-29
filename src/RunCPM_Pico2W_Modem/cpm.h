@@ -749,7 +749,10 @@ void _Bdos(void) {
        Returns: A=Char
      */
     case C_READ: {
+        // DBG: if this prints and is never followed by [C1done], _getconE() is blocking
+        _puts("[C1wait]\r\n");
         HL = _getconE();
+        _puts("[C1done]\r\n");
     #ifdef DEBUG
         if (HL == DEBUGKEY)
             Debug = 1;
@@ -1122,6 +1125,8 @@ void _Bdos(void) {
      */
     case C_STAT: {
         HL = _chready();
+        // DBG: only print when non-zero (i.e. when MODEM.COM is about to call C_READ)
+        if (HL) _puts("[C11=FF]\r\n");
         break;
     }
 #endif // ABDOS
