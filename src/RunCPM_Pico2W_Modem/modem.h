@@ -140,11 +140,13 @@ static void modem_dial(const char *dest);
 // =========================================================================================
 
 // Push a string into the Z80-readable AUX RX buffer so CP/M programs receive it
-// via B_READER / port 0x80.  Also echo to Serial for operator visibility.
+// via B_READER / port 0x80.
+// NOTE: Do NOT also call _putch() here — CP/M programs (MODEM.COM etc.) read these
+// bytes from rx_buf and output them via BDOS fn 2 themselves.  Calling _putch()
+// here as well causes double output and garbled terminal display.
 static void modem_to_rx(const char *s) {
     while (*s) {
         if (!rx_full()) rx_push((uint8)*s);
-        _putch(*s);
         s++;
     }
 }
@@ -519,7 +521,6 @@ void modem_write(uint8 ch) {
             cmd_len--;
             if (modem_echo) {
                 rx_push(ch); rx_push(' '); rx_push(ch);   // back to Z80 via AUX RX
-                _putch(ch);  _putch(' ');  _putch(ch);    // visible on Serial console
             }
             return;
         }
@@ -529,7 +530,6 @@ void modem_write(uint8 ch) {
             cmd_buf[cmd_len] = 0;
             if (modem_echo) {
                 rx_push('\r'); rx_push('\n');   // back to Z80
-                _putch('\r');  _putch('\n');    // visible on Serial console
             }
 
             // A/ — repeat last command
@@ -550,7 +550,6 @@ void modem_write(uint8 ch) {
             cmd_buf[cmd_len++] = (ch >= 'a' && ch <= 'z') ? (ch - 32) : ch;
             if (modem_echo) {
                 rx_push(ch);   // echo back to Z80 via AUX RX
-                _putch(ch);    // visible on Serial console
             }
         }
     }
