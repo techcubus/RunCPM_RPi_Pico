@@ -139,20 +139,30 @@ static void modem_dial(const char *dest);
 // Internal helpers
 // =========================================================================================
 
-// Send a result code to the Z80 console, respecting ATV / ATQ
+// Push a string into the Z80-readable AUX RX buffer so CP/M programs receive it
+// via B_READER / port 0x80.  Also echo to Serial for operator visibility.
+static void modem_to_rx(const char *s) {
+    while (*s) {
+        if (!rx_full()) rx_push((uint8)*s);
+        _putch(*s);
+        s++;
+    }
+}
+
+// Send a result code to the Z80 (AUX RX buffer), respecting ATV / ATQ
 static void modem_response(const char *msg) {
     if (modem_quiet) return;
     if (modem_verbose) {
-        _puts("\r\n"); _puts(msg); _puts("\r\n");
+        modem_to_rx("\r\n"); modem_to_rx(msg); modem_to_rx("\r\n");
     } else {
         // Numeric equivalents
-        if      (strcmp(msg, RC_OK)         == 0) _puts("0\r");
-        else if (strcmp(msg, RC_CONNECT)    == 0) _puts("1\r");
-        else if (strcmp(msg, RC_RING)       == 0) _puts("2\r");
-        else if (strcmp(msg, RC_NO_CARRIER) == 0) _puts("3\r");
-        else if (strcmp(msg, RC_ERROR)      == 0) _puts("4\r");
-        else if (strcmp(msg, RC_NO_ANSWER)  == 0) _puts("8\r");
-        else { _puts(msg); _puts("\r"); }
+        if      (strcmp(msg, RC_OK)         == 0) modem_to_rx("0\r");
+        else if (strcmp(msg, RC_CONNECT)    == 0) modem_to_rx("1\r");
+        else if (strcmp(msg, RC_RING)       == 0) modem_to_rx("2\r");
+        else if (strcmp(msg, RC_NO_CARRIER) == 0) modem_to_rx("3\r");
+        else if (strcmp(msg, RC_ERROR)      == 0) modem_to_rx("4\r");
+        else if (strcmp(msg, RC_NO_ANSWER)  == 0) modem_to_rx("8\r");
+        else { modem_to_rx(msg); modem_to_rx("\r"); }
     }
 }
 
@@ -282,10 +292,10 @@ static void modem_process_command() {
         case 'I':
             if (*p == '1') {
                 p++;
-                _puts("\r\nRunCPM v" VERSION " / " GL_REV "\r\n");
+                modem_to_rx("\r\nRunCPM v" VERSION " / " GL_REV "\r\n");
             } else {
                 if (*p == '0') p++;
-                _puts("\r\nRunCPM WiFi Modem (Pico 2 W)\r\n");
+                modem_to_rx("\r\nRunCPM WiFi Modem\r\n");
             }
             break;
 
@@ -348,7 +358,7 @@ static void modem_process_command() {
                 p++;
                 char buf[8];
                 snprintf(buf, sizeof(buf), "\r\n%u\r\n", s_reg[reg]);
-                _puts(buf);
+                modem_to_rx(buf);
             } else {
                 ok = false;
             }
@@ -364,25 +374,25 @@ static void modem_process_command() {
             switch (sub) {
             case '?': {  // AT+W? — WiFi status
                 switch (WiFi.status()) {
-                case WL_IDLE_STATUS:     _puts("\r\nWIFI IDLE\r\n");            break;
-                case WL_NO_SSID_AVAIL:  _puts("\r\nWIFI NO SSID\r\n");         break;
-                case WL_CONNECTED:      _puts("\r\nWIFI CONNECTED\r\n");        break;
-                case WL_CONNECT_FAILED: _puts("\r\nWIFI CONNECT FAILED\r\n");  break;
-                case WL_CONNECTION_LOST:_puts("\r\nWIFI CONNECTION LOST\r\n"); break;
-                case WL_DISCONNECTED:   _puts("\r\nWIFI DISCONNECTED\r\n");     break;
-                default:                _puts("\r\nWIFI NOT STARTED\r\n");      break;
+                case WL_IDLE_STATUS:     modem_to_rx("\r\nWIFI IDLE\r\n");            break;
+                case WL_NO_SSID_AVAIL:  modem_to_rx("\r\nWIFI NO SSID\r\n");         break;
+                case WL_CONNECTED:      modem_to_rx("\r\nWIFI CONNECTED\r\n");        break;
+                case WL_CONNECT_FAILED: modem_to_rx("\r\nWIFI CONNECT FAILED\r\n");  break;
+                case WL_CONNECTION_LOST:modem_to_rx("\r\nWIFI CONNECTION LOST\r\n"); break;
+                case WL_DISCONNECTED:   modem_to_rx("\r\nWIFI DISCONNECTED\r\n");     break;
+                default:                modem_to_rx("\r\nWIFI NOT STARTED\r\n");      break;
                 }
                 break;
             }
             case '$':  // AT+W$ — IP address
-                _puts("\r\n");
-                _puts(WiFi.localIP().toString().c_str());
-                _puts("\r\n");
+                modem_to_rx("\r\n");
+                modem_to_rx(WiFi.localIP().toString().c_str());
+                modem_to_rx("\r\n");
                 break;
             case '#':  // AT+W# — MAC address
-                _puts("\r\n");
-                _puts(WiFi.macAddress().c_str());
-                _puts("\r\n");
+                modem_to_rx("\r\n");
+                modem_to_rx(WiFi.macAddress().c_str());
+                modem_to_rx("\r\n");
                 break;
             case '+':  // AT+W+ — reconnect
                 WiFi.begin(modem_ssid, modem_pass[0] ? modem_pass : NULL);
@@ -473,14 +483,20 @@ void modem_write(uint8 ch) {
         // Backspace
         if (ch == s_reg[S_BS] && cmd_len > 0) {
             cmd_len--;
-            if (modem_echo) { _putcon(ch); _putcon(' '); _putcon(ch); }
+            if (modem_echo) {
+                rx_push(ch); rx_push(' '); rx_push(ch);   // back to Z80 via AUX RX
+                _putch(ch);  _putch(' ');  _putch(ch);    // visible on Serial console
+            }
             return;
         }
 
         // Carriage return — execute
         if (ch == s_reg[S_CR]) {
             cmd_buf[cmd_len] = 0;
-            if (modem_echo) { _putcon('\r'); _putcon('\n'); }
+            if (modem_echo) {
+                rx_push('\r'); rx_push('\n');   // back to Z80
+                _putch('\r');  _putch('\n');    // visible on Serial console
+            }
 
             // A/ — repeat last command
             if (cmd_len >= 2 && cmd_buf[0] == 'A' && cmd_buf[1] == '/') {
@@ -498,7 +514,10 @@ void modem_write(uint8 ch) {
         // Buffer the character — uppercase for AT parsing
         if (cmd_len < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_len++] = (ch >= 'a' && ch <= 'z') ? (ch - 32) : ch;
-            if (modem_echo) _putcon(ch);
+            if (modem_echo) {
+                rx_push(ch);   // echo back to Z80 via AUX RX
+                _putch(ch);    // visible on Serial console
+            }
         }
     }
 }
