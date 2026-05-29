@@ -258,8 +258,17 @@ static void modem_process_command() {
         case '&': {
             char sub = *p++;
             switch (sub) {
+            case 'C':   // &C — DCD mode (no-op: we control DCD via MSR bit 7)
+                while (*p >= '0' && *p <= '9') p++;
+                break;
+            case 'D':   // &D — DTR mode (no-op)
+                while (*p >= '0' && *p <= '9') p++;
+                break;
             case 'F':
                 modem_echo = true; modem_quiet = false; modem_verbose = true;
+                break;
+            case 'K':   // &K — flow control (no-op)
+                while (*p >= '0' && *p <= '9') p++;
                 break;
             case 'W':
                 // TODO: write settings back to MODEM.CFG on SD card
@@ -270,10 +279,25 @@ static void modem_process_command() {
             break;
         }
 
+        // B — baud negotiation mode (no-op: we're TCP)
+        case 'B':
+            while (*p >= '0' && *p <= '9') p++;
+            break;
+
         // E — echo
         case 'E':
             modem_echo = (*p != '0');
             if (*p == '0' || *p == '1') p++;
+            break;
+
+        // L — speaker volume (no-op: no speaker)
+        case 'L':
+            while (*p >= '0' && *p <= '9') p++;
+            break;
+
+        // M — speaker mode (no-op: no speaker)
+        case 'M':
+            while (*p >= '0' && *p <= '9') p++;
             break;
 
         // Q — quiet mode
@@ -286,6 +310,16 @@ static void modem_process_command() {
         case 'V':
             modem_verbose = (*p != '0');
             if (*p == '0' || *p == '1') p++;
+            break;
+
+        // X — result code level (no-op: we always send full word codes)
+        case 'X':
+            while (*p >= '0' && *p <= '9') p++;
+            break;
+
+        // Y — long-space disconnect (no-op)
+        case 'Y':
+            while (*p >= '0' && *p <= '9') p++;
             break;
 
         // I — identify
