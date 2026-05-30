@@ -547,11 +547,22 @@ uint8 _getche(void) {
 }
 
 void _putch(uint8 ch) {
-// LED here diabled because of freezes with compile option -o3
-// that seem that the Pico2 is to fast for outputting text and setting the LED on/off with FRAROIUND.COM  
-//   digitalWrite(LED, HIGH ^ LEDinv);
-  Serial.write(ch);
-//   digitalWrite(LED, LOW ^ LEDinv);
+    // Non-blocking-with-timeout write.
+    // Plain Serial.write() can block indefinitely if the USB CDC TX buffer is
+    // full and the host is not reading (closed terminal, stalled minicom, etc.).
+    // Blocking here stalls the Z80 emulator — including modem_update() — causing
+    // a hard freeze that requires a power cycle.
+    //
+    // Strategy: give the host up to 100 ms to drain its read buffer, then drop
+    // the character.  Normal terminal I/O is fast enough that this timeout is
+    // never reached; it only fires when the USB CDC link is genuinely stuck.
+    // For a modem bridge application, occasional dropped characters under extreme
+    // back-pressure are far better than a permanent firmware hang.
+    uint32 deadline = millis() + 100;
+    while (!Serial.availableForWrite()) {
+        if ((int32)(millis() - deadline) >= 0) return;  // drop char — host is stuck
+    }
+    Serial.write(ch);
 }
 
 void _clrscr(void) {

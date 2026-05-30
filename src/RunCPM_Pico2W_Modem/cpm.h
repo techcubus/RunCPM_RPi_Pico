@@ -643,7 +643,19 @@ void _Bios(void) {
     }
     case B_AUXIST: { // 18 - Return status of current auxiliary input device
 #ifdef USE_MODEM
-        SET_HIGH_REGISTER(AF, modem_rx_available() ? 0xff : 0x00);
+        bool _avail = modem_rx_available();
+        SET_HIGH_REGISTER(AF, _avail ? 0xff : 0x00);
+        // DBG: every 30K calls (~3 sec at ~10K/sec) show actual rx ring state.
+        // This tells us: is B_AUXIST returning the right value for the ring content?
+        static uint32 _auxist_dbg = 0;
+        if (++_auxist_dbg >= 30000) {
+            _auxist_dbg = 0;
+            _puts("[AXST:");
+            _putch(_avail ? 'Y' : 'N');
+            _puts(" rx=");
+            _dbg_uint32(rx_count());
+            _puts("]\r\n");
+        }
 #else
         SET_HIGH_REGISTER(AF, 0x00);
 #endif
@@ -753,10 +765,7 @@ void _Bdos(void) {
        Returns: A=Char
      */
     case C_READ: {
-        // DBG: if this prints and is never followed by [C1done], _getconE() is blocking
-        _puts("[C1wait]\r\n");
         HL = _getconE();
-        _puts("[C1done]\r\n");
     #ifdef DEBUG
         if (HL == DEBUGKEY)
             Debug = 1;
